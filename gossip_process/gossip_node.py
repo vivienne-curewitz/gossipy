@@ -14,6 +14,12 @@ from worker import MeanWorker
 
 # god python is so bad at networking; wtf
 class PeerHandler(BaseHTTPRequestHandler):
+    def log_message(self, format, *args):
+        return
+        # if "code" in format:
+            # return  # ignore "GET /path -> 200" type logs
+        # super().log_message(format, *args)
+
     def do_POST(self):
         if self.path == "/peers":
             # parse
@@ -82,7 +88,6 @@ class GossipNode:
         self.listen()
 
     def get_peers(self):
-        print(f"{self.name} getting peers")
         resp = requests.post(f"http://{self.peers[0]}/peers", json={"address": f"{self.ip}:{self.port}"}, timeout=1)
         jdata = resp.json()
         self.add_many_peers(jdata["peers"])
@@ -124,7 +129,7 @@ class GossipNode:
                 model_params = self.outqueue.get(timeout=1)
             except Empty as e:
                 model_params = self.worker.data
-            print(f"{self.name} -- Peers: {self.peers}")
+            # print(f"{self.name} -- Peers: {self.peers}")
             peer = self.get_random_peer()
             if peer is None:
                 return
@@ -173,4 +178,4 @@ def run_many(gns: int):
 if __name__ == "__main__":
     # gn = GossipNode("base", "0.0.0.0", 8080)
     # gn.start()
-    run_many(10)
+    run_many(100)
