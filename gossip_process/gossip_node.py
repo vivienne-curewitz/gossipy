@@ -3,15 +3,20 @@
 # 2. Listener - waits for gossip from a friend
 # 3. Chatter - sends gossip to a friend
 # obviously they aren't friends, just sister processes which form the nodes that are walked by the learning algorithm.
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 from threading import Thread 
 from queue import Queue, Empty
 import requests
 from random import randint
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
-from multiprocessing import Process
-from worker import MeanWorker
-
+from multiprocessing import Process, Queue as MPQueue
+from worker import MeanWorker, ReportingMeanWorker
+from utils.graph_process import plot_process
+from urllib3.exceptions import MaxRetryError
 # god python is so bad at networking; wtf
 class PeerHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
@@ -25,7 +30,7 @@ class PeerHandler(BaseHTTPRequestHandler):
             # parse
             clength = int(self.headers.get("Content-Length", 0))
             data = self.rfile.read(clength)
-            print(f"Got peer request: {str(data)}")
+            # print(f"Got peer request: {str(data)}")
             jdata = json.loads(data)
             self.server.node.add_peer(jdata["address"])
             self.send_response(200)
@@ -78,17 +83,24 @@ class GossipNode:
     def start(self):
         # start other threads
         chatter = Thread(target=self.send, daemon=True) 
-        worker_thread = Thread(target=self.worker.run)
+        worker_thread = Thread(target=self.worker.run, daemon=True)
+        listener_thread = Thread(target=self.listen, daemon=True)
         # start listen thread
+        listener_thread.start()
         # a bit hacky, but this is the case when it has been seeded with a base peer
         if len(self.peers) == 1:
             self.get_peers()
         chatter.start()
         worker_thread.start()
-        self.listen()
+        # stay alive
+        listener_thread.join()
 
     def get_peers(self):
-        resp = requests.post(f"http://{self.peers[0]}/peers", json={"address": f"{self.ip}:{self.port}"}, timeout=1)
+        try:
+            resp = requests.post(f"http://{self.peers[0]}/peers", json={"address": f"{self.ip}:{self.port}"}, timeout=10)
+        except MaxRetryError:
+            print(f"Node {self.name} failed to get peers from {self.peers[0]}")
+            return
         jdata = resp.json()
         self.add_many_peers(jdata["peers"])
     
@@ -112,7 +124,7 @@ class GossipNode:
 
     def listen(self):
         server = PeerHttpServer((self.ip, self.port), PeerHandler, self)
-        print("Server running")
+        # print("Server running")
         server.serve_forever()
 
     def get_random_peer(self):
@@ -147,15 +159,18 @@ class GossipNode:
         self.add_many_peers(peers)
         self.inqueue.put(model)
 
-def node_process(local_ip, base_port, i):
-    print(f"Start Node at {local_ip}:{base_port+i}")
-    wt = MeanWorker(i+1)
+def node_process(local_ip, base_port, i, report_queue: Queue):
+    # print(f"Start Node at {local_ip}:{base_port+i}")
+    if i%10 == 0:
+        wt = ReportingMeanWorker(i, report_queue, i)
+    else:  
+        wt = MeanWorker(i)
     gt = GossipNode(f"gp{i}", local_ip, base_port+i, wt)
     gt.add_peer(f"{local_ip}:{base_port}")
     gt.start()
 
 def node_base_process(local_ip, base_port, i):
-    print(f"Start Node at {local_ip}:{base_port+i}")
+    # print(f"Start Node at {local_ip}:{base_port+i}")
     wt = MeanWorker(i)
     gt = GossipNode(f"gp{i}", local_ip, base_port+i, wt)
     gt.start()
@@ -165,12 +180,15 @@ def run_many(gns: int):
     base_port = 8080
     local_ip = "0.0.0.0"
     w0 = MeanWorker(0)
+    report_queue = MPQueue(1000)
     # gn.start()
     procs.append(Process(target=node_base_process, args=[local_ip, base_port, 0], daemon=True))
     for i in range(gns - 1):
-        procs.append(Process(target=node_process, args=[local_ip, base_port, i+1], daemon=True))
+        procs.append(Process(target=node_process, args=[local_ip, base_port, i+1, report_queue], daemon=True))
     for proc in procs:
         proc.start()
+    # plot stuff here
+    plot_process(report_queue, [i+1 for i in range(gns-1) if (i+1)%10 == 0])
     for proc in procs:
         proc.join()
 
@@ -178,4 +196,4 @@ def run_many(gns: int):
 if __name__ == "__main__":
     # gn = GossipNode("base", "0.0.0.0", 8080)
     # gn.start()
-    run_many(100)
+    run_many(1)
