@@ -5,6 +5,7 @@ from multiprocessing import Process
 import time
 import requests
 from random import randint
+from sklearn.metrics import accuracy_score
 
 # init data set and split into trainging and testing here
 def init_data(filename):
@@ -28,29 +29,27 @@ def svm_gossip_process(local_ip, base_port, i, data):
 
 def test_accuracy(num_nodes, test_df, base_port):
     hit = 0
-    x_test = test_df.iloc[:, :-1].values
-    y_test = test_df.iloc[:, -1].values
     samples = 100
-    for _ in range(samples):
-        i = randint(0, num_nodes - 1)
-        port = base_port + i
-        value_index = randint(0, len(y_test) - 1)
-        try:
-            data = {
-                "data": x_test[value_index:value_index+1].tolist()
-            }
-            resp = requests.post(f"http://127.0.0.1:{port}/inference", json=data, timeout=1)
-            if resp.ok:
-                jdata = resp.json()
-                preds = jdata["inference"][0]
-                if preds == y_test[value_index]:
-                    hit += 1
-            else:
-                print(f"Node {port} returned error status {resp.status_code}")
-        except Exception as e:
-            # print(f"Failed to connect to node {port} with error {e}")
-            pass
-    print(f"\nAccuracy sampled from node {port}: {hit/samples*100}")
+    sample = test_df.sample(n=samples)
+    x_test = sample.iloc[:, :-1].values
+    y_test = sample.iloc[:, -1].values
+    i = randint(0, num_nodes - 1)
+    port = base_port + i
+    try:
+        data = {
+            "data": x_test.tolist()
+        }
+        resp = requests.post(f"http://127.0.0.1:{port}/inference", json=data, timeout=1)
+        if resp.ok:
+            jdata = resp.json()
+            preds = jdata["inference"]
+            acc = accuracy_score(preds, y_test)
+            print(f"\nAccuracy sampled from node {port}: {acc}")
+        else:
+            print(f"Node {port} returned error status {resp.status_code}")
+    except Exception as e:
+        # print(f"Failed to connect to node {port} with error {e}")
+        pass
     
 
 def run_n_nodes(local_ip, base_port, n_nodes, filename):
@@ -72,4 +71,4 @@ def run_n_nodes(local_ip, base_port, n_nodes, filename):
 
 if __name__ == "__main__":
     print("Running gossip SVM test...")
-    run_n_nodes("0.0.0.0", 8080, 10, "data/spambase.csv")
+    run_n_nodes("0.0.0.0", 8080, 20, "data/spambase.csv")
